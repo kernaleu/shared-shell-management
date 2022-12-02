@@ -35,6 +35,7 @@ const shell = "/bin/bash"
 type systemUser struct {
 	Username string `yaml:"username"`
 	Id string `yaml:"id"`
+	PublicKey string `yaml:"public_key"`
 	SystemdLimits string `yaml:"systemd_limits"`
 	State string `yaml:"state"`
 }
@@ -55,47 +56,69 @@ func main() {
 		log.Fatal(err)
 	}
 
-	userDoesNotExist := new(user.UnknownUserError)
 	for _, u := range users {
-		if _, err := user.Lookup(u.Username); !errors.As(err, userDoesNotExist) {
-			if err != nil {
-				log.Fatal(err)
-			}
-			// Skip pre existing user
-			continue
+		switch(u.State) {
+		case "present":
+			createUser(u)
 		}
-
-		bdir := "/home/" + u.Username[0:1]
-		// Create base directory
-		if _, err := os.Stat(bdir); errors.Is(err, os.ErrNotExist) {
-			if err := os.Mkdir(bdir, 0755); err != nil {
-				log.Fatal(err)
-			}
-		}
-
-		// TODO: There isn't a library that does this programatically, yet.
-		if err := exec.Command("groupadd", "-g", u.Id, u.Username).Run(); err != nil {
-			log.Fatalf("Failed to create group %s: %s", u.Username, err.Error())
-		}
-		if err := exec.Command("useradd", "-b", bdir, "-m", "-u", u.Id, "-g", u.Username,
-		    "-s", shell, u.Username).Run(); err != nil {
-			log.Fatalf("Failed to create user %s: %s", u.Username, err.Error())
-		}
-
-		// Create systemd user slice
-		sliceDir := "/etc/systemd/system/user-" + u.Id + ".slice.d"
-		if err := os.Mkdir(sliceDir, 0755); err != nil {
-			log.Fatal("Failed to create directory for user slice:", err)
-		}
-		f, err := os.OpenFile(sliceDir + "/override.conf", os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			log.Fatal("Failed to create user slice override.conf:", err)
-		}
-		f.WriteString(u.SystemdLimits)
-		f.Close()
 	}
 
 	if err := systemd.ReloadContext(context.Background()); err != nil {
 		log.Fatal("Failed to reload daemon:", err)
 	}
+}
+
+func createUser(u systemUser) {
+	userDoesNotExist := new(user.UnknownUserError)
+	if _, err := user.Lookup(u.Username); !errors.As(err, userDoesNotExist) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		// Skip pre existing user
+		return
+	}
+
+	bdir := "/home/" + u.Username[0:1]
+	// Create base directory
+	if _, err := os.Stat(bdir); errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(bdir, 0755); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	// TODO: There isn't a library that does this programatically, yet.
+	if err := exec.Command("groupadd", "-g", u.Id, u.Username).Run(); err != nil {
+		log.Fatalf("Failed to create group %s: %s", u.Username, err.Error())
+	}
+	if err := exec.Command("useradd", "-b", bdir, "-m", "-u", u.Id, "-g", u.Username,
+	    "-s", shell, u.Username).Run(); err != nil {
+		log.Fatalf("Failed to create user %s: %s", u.Username, err.Error())
+	}
+
+	// Create systemd user slice
+	sliceDir := "/etc/systemd/system/user-" + u.Id + ".slice.d"
+	if err := os.Mkdir(sliceDir, 0755); err != nil {
+		log.Fatal("Failed to create directory for user slice:", err)
+	}
+	of, err := os.OpenFile(sliceDir + "/override.conf", os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatal("Failed to create user slice override.conf:", err)
+	}
+	of.WriteString(u.SystemdLimits)
+	of.Close()
+
+	if u.PublicKey == "" { return }
+
+	// Add key to authorized keys
+	sshDir := bdir + "/" + u.Username + "/.ssh"
+	if err := os.Mkdir(sshDir, 0700); err != nil {
+		log.Fatal("Failed to create directory for user slice:", err)
+	}
+	af, err := os.OpenFile(sshDir + "/authorized_keys",
+	    os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		log.Fatal("Failed to open authorized_keys:", err)
+	}
+	af.WriteString(u.PublicKey)
+	af.Close()
 }
