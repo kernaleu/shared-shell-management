@@ -25,6 +25,7 @@ import (
 	"os/user"
 	"os/exec"
 	"errors"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 	"github.com/coreos/go-systemd/v22/dbus"
@@ -78,19 +79,12 @@ func createUser(u systemUser) {
 		return
 	}
 
-	bdir := "/home/" + u.Username[0:1]
-	// Create base directory
-	if _, err := os.Stat(bdir); errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(bdir, 0755); err != nil {
-			log.Fatal(err)
-		}
-	}
-
+	homeDir := "/home/" + u.Username[0:1] + "/" + u.Username
 	// TODO: There isn't a library that does this programatically, yet.
 	if err := exec.Command("groupadd", "-g", u.Id, u.Username).Run(); err != nil {
 		log.Fatalf("Failed to create group %s: %s", u.Username, err.Error())
 	}
-	if err := exec.Command("useradd", "-b", bdir, "-m", "-u", u.Id, "-g", u.Username,
+	if err := exec.Command("useradd", "-d", homeDir, "-u", u.Id, "-g", u.Username,
 	    "-s", shell, u.Username).Run(); err != nil {
 		log.Fatalf("Failed to create user %s: %s", u.Username, err.Error())
 	}
@@ -110,14 +104,24 @@ func createUser(u systemUser) {
 	if u.PublicKey == "" { return }
 
 	// Add key to authorized keys
-	sshDir := bdir + "/" + u.Username + "/.ssh"
+	sshDir := homeDir + "/.ssh"
 	if err := os.Mkdir(sshDir, 0700); err != nil {
-		log.Fatal("Failed to create directory for user slice:", err)
+		log.Fatal("Failed to create .ssh:", err)
+	}
+	id, err := strconv.Atoi(u.Id)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.Chown(sshDir, id, id); err != nil {
+		log.Fatal("Failed to chown .ssh:", err)
 	}
 	af, err := os.OpenFile(sshDir + "/authorized_keys",
 	    os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		log.Fatal("Failed to open authorized_keys:", err)
+	}
+	if err := os.Chown(sshDir + "/authorized_keys", id, id); err != nil {
+		log.Fatal("Failed to chown authorized_keys:", err)
 	}
 	af.WriteString(u.PublicKey)
 	af.Close()
