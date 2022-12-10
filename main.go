@@ -22,10 +22,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"os/user"
-	"os/exec"
-	"errors"
-	"strconv"
 
 	"gopkg.in/yaml.v3"
 	"github.com/coreos/go-systemd/v22/dbus"
@@ -67,62 +63,4 @@ func main() {
 	if err := systemd.ReloadContext(context.Background()); err != nil {
 		log.Fatal("Failed to reload daemon:", err)
 	}
-}
-
-func createUser(u systemUser) {
-	userDoesNotExist := new(user.UnknownUserError)
-	if _, err := user.Lookup(u.Username); !errors.As(err, userDoesNotExist) {
-		if err != nil {
-			log.Fatal(err)
-		}
-		// Skip pre existing user
-		return
-	}
-
-	homeDir := "/home/" + u.Username[0:1] + "/" + u.Username
-	// TODO: There isn't a library that does this programatically, yet.
-	if err := exec.Command("groupadd", "-g", u.Id, u.Username).Run(); err != nil {
-		log.Fatalf("Failed to create group %s: %s", u.Username, err.Error())
-	}
-	if err := exec.Command("useradd", "-d", homeDir, "-u", u.Id, "-g", u.Username,
-	    "-s", shell, u.Username).Run(); err != nil {
-		log.Fatalf("Failed to create user %s: %s", u.Username, err.Error())
-	}
-
-	// Create systemd user slice
-	sliceDir := "/etc/systemd/system/user-" + u.Id + ".slice.d"
-	if err := os.Mkdir(sliceDir, 0755); err != nil {
-		log.Fatal("Failed to create directory for user slice:", err)
-	}
-	of, err := os.OpenFile(sliceDir + "/override.conf", os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatal("Failed to create user slice override.conf:", err)
-	}
-	of.WriteString(u.SystemdLimits)
-	of.Close()
-
-	if u.PublicKey == "" { return }
-
-	// Add key to authorized keys
-	sshDir := homeDir + "/.ssh"
-	if err := os.Mkdir(sshDir, 0700); err != nil {
-		log.Fatal("Failed to create .ssh:", err)
-	}
-	id, err := strconv.Atoi(u.Id)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := os.Chown(sshDir, id, id); err != nil {
-		log.Fatal("Failed to chown .ssh:", err)
-	}
-	af, err := os.OpenFile(sshDir + "/authorized_keys",
-	    os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		log.Fatal("Failed to open authorized_keys:", err)
-	}
-	if err := os.Chown(sshDir + "/authorized_keys", id, id); err != nil {
-		log.Fatal("Failed to chown authorized_keys:", err)
-	}
-	af.WriteString(u.PublicKey)
-	af.Close()
 }

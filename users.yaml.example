@@ -2,7 +2,7 @@
   id: 70001
   state: present
   public_key: ssh-ed25519 AAAA... siren
-  systemd_limits: >
+  systemd_limits: |
     [Slice]
     MemoryMax=512M
     CPUQuota=50%
